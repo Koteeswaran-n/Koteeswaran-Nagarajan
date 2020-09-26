@@ -1,0 +1,448 @@
+============================================================================================================================================================================================================
+Usecase 1:
+**********
+1. Login to Mysql and execute the sql file to load the custpayments table:
+source /home/hduser/hiveusecase/custpayments_ORIG.sql
+
+2. Write sqoop command to import data from customerpayments table with 2 mappers, with enclosed
+by " (As we have ',' in the data itself we are importing in sqoop using --enclosed-by option into the
+location /user/hduser/custpayments).
+
+sqoop import --connect jdbc:mysql://localhost/custpayments --username root --password root -table customers -m 2 --split-by customernumber --target-dir /user/hduser/custpayments/ --delete-target-dir --enclosed-by '\"';
+
+20/07/15 03:40:49 INFO mapreduce.ImportJobBase: Transferred 17.1416 KB in 43.4219 seconds (404.2426 bytes/sec)
+20/07/15 03:40:49 INFO mapreduce.ImportJobBase: Retrieved 122 records.
+[hduser@Inceptez ~]$ hadoop fs -ls /user/hduser/custpayments/*
+20/07/15 03:42:54 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+-rw-r--r--   1 hduser hadoop          0 2020-07-15 03:40 /user/hduser/custpayments/_SUCCESS
+-rw-r--r--   1 hduser hadoop       8962 2020-07-15 03:40 /user/hduser/custpayments/part-m-00000
+-rw-r--r--   1 hduser hadoop       8591 2020-07-15 03:40 /user/hduser/custpayments/part-m-00001
+[hduser@Inceptez ~]$ hadoop fs -cat /user/hduser/custpayments/part-m-00000 | wc -l
+20/07/15 03:44:01 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+62
+[hduser@Inceptez ~]$ hadoop fs -cat /user/hduser/custpayments/part-m-00001 | wc -l
+20/07/15 03:44:28 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+60
+[hduser@Inceptez ~]$ 
+
+[hduser@Inceptez ~]$ hadoop fs -cat /user/hduser/custpayments/part-m-00001 | head -2
+20/07/15 03:47:53 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+"303","Schuyler Imports","Schuyler","Bradley","+31 20 491 9555","Kingsfordweg 151","null","Amsterdam","null","1043 GR","Netherlands","null","0.00"
+"307","Der Hund Imports","Andersen","Mel","030-0074555","Obere Str. 57","null","Berlin","null","12209","Germany","null","0.00"
+cat: Unable to write to output stream.
+[hduser@Inceptez ~]$ 
+
+
+3. Create a hive external table and load the sqoop imported data to the hive table called custpayments.
+As we have ',' in the data itself we are using quotedchar option below with the csv serde option as given
+below as example, create the table with all columns.
+create external table custmaster (customerNumber int,customername string,contactlastname
+string,contactfirstname string)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES (
+"separatorChar" = ",",
+"quoteChar"
+= "\"")
+LOCATION '/user/hduser/custpayments/';
+
+hive (custdb)> create external table custpayments (customerNumber int,customername string,contactlastname string,contactfirstname string,phone string,addressLine1 string,addressLine2 string,city string,state string,postalCode string,country string,salesRepEmployeeNumber int,creditLimit double)
+             > ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+             > WITH SERDEPROPERTIES (
+             > "separatorChar" = ",",
+             > "quoteChar"
+             > = "\"")
+             > LOCATION '/user/hduser/custpayments/';
+OK
+Time taken: 0.234 seconds
+hive (custdb)> select * from custpayments limit 2;
+OK
+103	Atelier graphique	Schmitt	Carine 	40.32.2555	54, rue Royale	null	Nantes	null	44000	France	1370	21000.00
+112	Signal Gift Stores	King	Jean	7025551838	8489 Strong St.	null	Las Vegas	NV	83030	USA	1166	71800.00
+Time taken: 0.239 seconds, Fetched: 2 row(s)
+
+
+4. Copy the payments.txt into hdfs location /user/hduser/paymentsdata/ and Create an external table
+namely payments with customernumber, checknumber, paymentdate, amount columns to point the
+imported payments data.
+
+[hduser@Inceptez ~]$ hadoop fs -mkdir -p /user/hduser/paymentsdata
+20/07/15 04:12:49 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+[hduser@Inceptez ~]$ hadoop fs -put /home/hduser/hiveusecase/payments.txt /user/hduser/paymentsdata/
+20/07/15 04:15:23 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+[hduser@Inceptez ~]$ hadoop fs -ls /user/hduser/paymentsdata/*
+20/07/15 04:16:03 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+-rw-r--r--   1 hduser hadoop       9219 2020-07-15 04:15 /user/hduser/paymentsdata/payments.txt
+
+create external table payments (customernumber int, checknumber string, paymentdate date, amount double)
+row format delimited fields terminated by ','
+location '/user/hduser/paymentsdata/';
+
+hive (custdb)> set hive.cli.print.header=true;
+hive (custdb)> select * from payments limit 2;
+OK
+payments.customernumber	payments.checknumber	payments.paymentdate	payments.amount
+103	HQ336336	2016-10-19	6066.78
+103	JM555205	2016-10-05	14571.44
+Time taken: 0.121 seconds, Fetched: 2 row(s)
+
+
+5. Create an external table called cust_payments in avro format and load data by doing inner join of
+custmaster and payments tables, using insert select customernumber,
+contactfirstname,contactlastname,phone, creditlimit from custmaster and paymentdate, amount
+columns from payments table
+
+sqoop import --connect jdbc:mysql://localhost/custpayments --username root --password root -table customers -m 2 --split-by customernumber --target-dir /user/hduser/custdata/ --delete-target-dir --enclosed-by '\"';
+
+create external table custmaster (customerNumber int,customername string,contactlastname string,contactfirstname string,phone string,addressLine1 string,addressLine2 string,city string,state string,postalCode string,country string,salesRepEmployeeNumber int,creditLimit double)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES (
+"separatorChar" = ",",
+"quoteChar" = "\"")
+LOCATION '/user/hduser/custdata/';
+
+create external table cust_payments (customernumber int, contactfirstname string,contactlastname string,phone string, creditlimit double, paymentdate date, amount double)
+row format delimited fields terminated by ','
+stored as avro
+location '/user/hduser/custjoinpaymentsavro/' ;
+
+insert into table cust_payments select a.customernumber,a.contactfirstname,a.contactlastname,a.phone,a.creditlimit,b.paymentdate,b.amount
+from custmaster a join payments b
+ON a.customernumber = b.customernumber;
+
+hive (custdb)> select * from cust_payments limit 10; 
+OK
+cust_payments.customernumber	cust_payments.contactfirstname	cust_payments.contactlastname	cust_payments.phone	cust_payments.creditlimit	cust_payments.paymentdate	cust_payments.amount
+103	Carine 	Schmitt	40.32.2555	21000.0	2016-10-19	6066.78
+103	Carine 	Schmitt	40.32.2555	21000.0	2016-10-05	14571.44
+103	Carine 	Schmitt	40.32.2555	21000.0	2016-10-18	1676.14
+112	Jean	King	7025551838	71800.0	2016-10-17	14191.12
+112	Jean	King	7025551838	71800.0	2016-10-06	32641.98
+112	Jean	King	7025551838	71800.0	2016-10-20	33347.88
+114	Peter	Ferguson	03 9520 4555	117300.0	2016-10-20	45864.03
+114	Peter	Ferguson	03 9520 4555	117300.0	2016-10-15	82261.22
+114	Peter	Ferguson	03 9520 4555	117300.0	2016-10-31	7565.08
+114	Peter	Ferguson	03 9520 4555	117300.0	2016-10-10	44894.74
+Time taken: 0.07 seconds, Fetched: 10 row(s)
+
+6. Create a view called custpayments_vw to only display customernumber,creditlimit,paymentdate and amount selected from cust_payments.
+
+create view custpayments_vw as select customernumber,creditlimit,paymentdate,amount from cust_payments;
+
+hive (custdb)> select * from custpayments_vw limit 10;
+OK
+custpayments_vw.customernumber	custpayments_vw.creditlimit	custpayments_vw.paymentdate	custpayments_vw.amount
+103	21000.0	2016-10-19	6066.78
+103	21000.0	2016-10-05	14571.44
+103	21000.0	2016-10-18	1676.14
+112	71800.0	2016-10-17	14191.12
+112	71800.0	2016-10-06	32641.98
+112	71800.0	2016-10-20	33347.88
+114	117300.0	2016-10-20	45864.03
+114	117300.0	2016-10-15	82261.22
+114	117300.0	2016-10-31	7565.08
+114	117300.0	2016-10-10	44894.74
+Time taken: 0.107 seconds, Fetched: 10 row(s)
+
+
+7. Extract only customernumber,creditlimit,paymentdate and amount columns either using the above
+view/cust_payments table into hdfs location /user/hduser/custpaymentsexport with '|' delimiter.
+
+insert overwrite directory '/user/hduser/custpaymentsexport'
+row format delimited fields terminated by '|'
+select customernumber,creditlimit,paymentdate,amount
+from cust_payments;
+
+[hduser@Inceptez ~]$ hadoop fs -ls /user/hduser/custpaymentsexport
+20/07/15 06:10:17 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+Found 1 items
+-rw-r--r--   1 hduser hadoop       8755 2020-07-15 06:09 /user/hduser/custpaymentsexport/000000_0
+[hduser@Inceptez ~]$ hadoop fs -cat /user/hduser/custpaymentsexport/000000_0 | head -5
+20/07/15 06:10:51 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+103|21000.0|2016-10-19|6066.78
+103|21000.0|2016-10-05|14571.44
+103|21000.0|2016-10-18|1676.14
+112|71800.0|2016-10-17|14191.12
+112|71800.0|2016-10-06|32641.98
+cat: Unable to write to output stream.
+
+
+8. Export the data from the /user/hduser/custpaymentsexport location to mysql table called cust_payments using sqoop export with staging table option using records per statement 100 and mappers 3.
+
+In Mysql:- 
+
+use custdb;
+
+Create the target table first
+CREATE TABLE cust_payments (customerNumber int(11),creditlimit decimal(10,1),paymentdate date,amount decimal(10,2));
+
+Create the stagging table next
+CREATE TABLE custpayments_stage (customerNumber int(11),creditlimit decimal(10,1),paymentdate date,amount decimal(10,2));
+
+In HDFS:-
+
+sqoop export -Dsqoop.export.records.per.statement=100 --connect jdbc:mysql://localhost/custdb --username root --password root --table cust_payments --export-dir /user/hduser/custpaymentsexport --batch --staging-table custpayments_stage --clear-staging-table --input-fields-terminated-by '|' --m 3;
+
+
+mysql> select * from cust_payments limit 10;
++----------------+-------------+-------------+----------+
+| customerNumber | creditlimit | paymentdate | amount   |
++----------------+-------------+-------------+----------+
+|            181 |     76400.0 | 2016-10-16  | 44400.50 |
+|            186 |     96500.0 | 2016-10-10  | 23602.90 |
+|            186 |     96500.0 | 2016-10-27  | 37602.48 |
+|            186 |     96500.0 | 2016-10-21  | 34341.08 |
+|            187 |    136800.0 | 2016-10-03  | 52825.29 |
+|            187 |    136800.0 | 2016-10-08  | 47159.11 |
+|            187 |    136800.0 | 2016-10-27  | 48425.69 |
+|            189 |     69400.0 | 2016-10-03  | 17359.53 |
+|            189 |     69400.0 | 2016-10-01  | 32538.74 |
+|            198 |     23000.0 | 2016-10-06  |  9658.74 |
++----------------+-------------+-------------+----------+
+10 rows in set (0.00 sec)
+
+In HDFS:-
+
+20/07/15 07:18:05 INFO mapreduce.ExportJobBase: Transferred 12.7842 KB in 15.0334 seconds (870.7949 bytes/sec)
+20/07/15 07:18:05 INFO mapreduce.ExportJobBase: Exported 273 records.
+20/07/15 07:18:05 INFO mapreduce.ExportJobBase: Starting to migrate data from staging table to destination.
+20/07/15 07:18:05 INFO manager.SqlManager: Migrated 273 records from `custpayments_stage` to `cust_payments`
+[hduser@Inceptez ~]$ hadoop fs -cat /user/hduser/custpaymentsexport/000000_0 | wc -l
+20/07/15 07:27:06 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+273
+
+============================================================================================================================================================================================================
+Usecase 2:
+**********
+
+Managing Fixed Width Data:
+1. Copy the below fixed data into a linux file, load into a hive table called cust_fixed_raw in a column rawdata.
+----------------------------------------------------------------------------------------------------------------
+
+1 Lara chennai 55 2016-09-2110000
+2 vasudevan banglore 43 2016-09-2390000
+3 Paul chennai 33 2019-02-2020000
+4 David Hanna New Jersey29 2019-04-22
+
+[hduser@Inceptez hiveusecase]$ vi cust_fixed_raw
+[hduser@Inceptez hiveusecase]$ cat cust_fixed_raw
+1 Lara        Chennai    55 2016-09-2110000
+2 Vasudevan   Bangalore  43 2016-09-2390000
+3 Paul        Chennai    33 2019-02-2020000
+4 David Hanna New Jersey 29 2019-04-22
+
+hive (custdb)> create table cust_fixed_raw(rawdata varchar(45)) stored as textfile;
+OK
+Time taken: 1.083 seconds
+hive (custdb)> load data local inpath '/home/hduser/hiveusecase/cust_fixed_raw' into table cust_fixed_raw; 
+Loading data to table custdb.cust_fixed_raw
+Table custdb.cust_fixed_raw stats: [numFiles=1, totalSize=171]
+OK
+Time taken: 1.922 seconds
+
+hive (custdb)> select * from cust_fixed_raw;
+OK
+cust_fixed_raw.rawdata
+1 Lara        Chennai    55 2016-09-2110000
+2 Vasudevan   Bangalore  43 2016-09-2390000
+3 Paul        Chennai    33 2019-02-2020000
+4 David Hanna New Jersey 29 2019-04-22
+Time taken: 1.03 seconds, Fetched: 4 row(s
+
+2. Create a temporary table called cust_delimited_parsed_temp with columns such as id,name,city,age,dt,amt and load the cust_fixed_raw table using substr.
+for eg to select id column : select trim(substr(rawdata,1,3)) from cust_fixed_raw;
+-----------------------------------------------------------------------------------
+drop table cust_delimited_parsed_temp;
+
+create temporary table cust_delimited_parsed_temp(id int,name string,city string,age int,dt date,amt double)
+row format delimited fields terminated by '|'
+lines terminated by '\n'
+stored as textfile;
+
+insert into table cust_delimited_parsed_temp
+select trim(substr(rawdata,1,1)),trim(substr(rawdata,3,11)),trim(substr(rawdata,15,10)),trim(substr(rawdata,26,2)),trim(substr(rawdata,29,10)),trim(substr(rawdata,39,5)) from cust_fixed_raw;
+
+hive (custdb)> select * from cust_delimited_parsed_temp;
+OK
+cust_delimited_parsed_temp.id	cust_delimited_parsed_temp.name	cust_delimited_parsed_temp.city	cust_delimited_parsed_temp.age	cust_delimited_parsed_temp.dt	cust_delimited_parsed_temp.amt
+1	Lara	Chennai	55	2016-09-21	10000.0
+2	Vasudevan	Bangalore	43	2016-09-23	90000.0
+3	Paul	Chennai	33	2019-02-20	20000.0
+4	David Hanna	New Jersey	29	2019-04-22	NULL
+Time taken: 0.132 seconds, Fetched: 4 row(s)
+
+
+3. Export only id, dt and amt column into a mysql table cust_fixed_mysql using sqoop export.
+
+Insert overwrite directory '/user/hduser/hiveusecase'
+row format delimited fields terminated by '|'
+select id,dt,amt from cust_delimited_parsed_temp;
+
+[hduser@Inceptez ~]$ hadoop fs -ls /user/hduser/hiveusecase/*
+20/09/24 01:48:39 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+-rw-r--r--   1 hduser hadoop         79 2020-09-24 01:48 /user/hduser/hiveusecase/000000_0
+[hduser@Inceptez ~]$ hadoop fs -cat /user/hduser/hiveusecase/000000_0
+20/09/24 01:49:04 WARN util.NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+1|2016-09-21|10000.0
+2|2016-09-23|90000.0
+3|2019-02-20|20000.0
+4|2019-04-22|\N
+
+option 1:- (Declaring amt field as Varchar)
+=========================================== 
+
+mysql> create table cust_fixed_mysql(id int,dt date,amt varchar(8));
+Query OK, 0 rows affected (0.01 sec)
+
+sqoop export --connect jdbc:mysql://localhost/custdb --username root --password root --table cust_fixed_mysql --export-dir /user/hduser/hiveusecase --input-fields-terminated-by '|' --m 1;
+
+mysql> select * from cust_fixed_mysql;
++------+------------+---------+
+| id   | dt         | amt     |
++------+------------+---------+
+|    1 | 2016-09-21 | 10000.0 |
+|    2 | 2016-09-23 | 90000.0 |
+|    3 | 2019-02-20 | 20000.0 |
+|    4 | 2019-04-22 | \N      |
++------+------------+---------+
+4 rows in set (0.00 sec)
+
+option 2:- (Declaring amt field as double)
+==========================================
+
+mysql> create table cust_fixed_mysql1(id int,dt date,amt double);
+Query OK, 0 rows affected (0.00 sec)
+
+[hduser@Inceptez ~]$ sqoop export --connect jdbc:mysql://localhost/custdb --username root --password root --table cust_fixed_mysql1 --export-dir /user/hduser/hiveusecase --input-fields-terminated-by '|' --m 1 --input-null-non-string '\\N';
+
+mysql> select * from cust_fixed_mysql1;
++------+------------+-------+
+| id   | dt         | amt   |
++------+------------+-------+
+|    1 | 2016-09-21 | 10000 |
+|    2 | 2016-09-23 | 90000 |
+|    3 | 2019-02-20 | 20000 |
+|    4 | 2019-04-22 |  NULL |
++------+------------+-------+
+4 rows in set (0.00 sec)
+
+
+4. Load only chennai data to another table called cust_parsed_orc of type orc format partitioned based on dt.
+
+External table:- 
+drop table cust_parsed_orc;
+
+create external table cust_parsed_orc(id int,name string,city string,age int,amt double) 
+partitioned by (dt date)
+row format delimited fields terminated by '|'
+lines terminated by '\n'
+stored as orcfile;
+
+Insert into table cust_parsed_orc partition (dt)
+select id,name,city,age,amt,dt
+from cust_delimited_parsed_temp
+where city='Chennai';
+
+Managed Table:-
+drop table cust_parsed_orc1;
+
+create table cust_parsed_orc1(id int,name string,city string,age int,amt double) 
+partitioned by (dt date)
+row format delimited fields terminated by '|'
+lines terminated by '\n'
+stored as orcfile;
+
+Insert into table cust_parsed_orc1 partition (dt)
+select id,name,city,age,amt,dt
+from cust_delimited_parsed_temp
+where city='Chennai';
+
+
+5. Create a json table called cust_parsed_json (to load into json use the following steps).
+In Hadoop:-
+cd /home/hduser/hiveusecase
+wget https://repo1.maven.org/maven2/org/apache/hive/hcatalog/hive-hcatalog-core/1.2.1/hive-hcatalog-core-1.2.1.jar
+
+In Hive:-
+add jar /home/hduser/hiveusecase/hive-hcatalog-core-1.2.1.jar;
+create external table cust_parsed_json(id int, name string,city string, age int)
+ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
+stored as textfile
+location '/user/hduser/custjson';
+
+6. Insert into the cust_parsed_json only non chennai data using insert select of id,name,city, age from
+the cust_delimited_parsed_temp table.
+
+Insert into table cust_parsed_json
+select id,name,city,age
+from cust_delimited_parsed_temp
+where city <> 'Chennai';
+
+hive (custdb)> select * from cust_parsed_json;
+OK
+cust_parsed_json.id	cust_parsed_json.name	cust_parsed_json.city	cust_parsed_json.age
+2	Vasudevan	Bangalore	43
+4	David Hanna	New Jersey	29
+Time taken: 0.069 seconds, Fetched: 2 row(s)
+
+7. Schema migration:
+Convert the XML table called xml_bank created in the actual usecase to JSON data by the same way like
+step 5 using create table as select.
+For eg:
+create external table xml_json
+ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
+stored as textfile
+location '/user/hduser/custxmljson'
+as select * from xml_bank;
+
+Solution:-
+
+hive (retail)> add jar /home/hduser/hiveusecase/hivexmlserde-1.0.5.3.jar
+             > ;
+Added [/home/hduser/hiveusecase/hivexmlserde-1.0.5.3.jar] to class path
+Added resources: [/home/hduser/hiveusecase/hivexmlserde-1.0.5.3.jar]
+hive (retail)> create table xml_json
+             > ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
+             > stored as textfile
+             > location '/user/hduser/custxmljson'
+             > as select * from xml_bank;
+
+Before:-
+
+hive (retail)> select * from xml_bank;
+OK
+xml_bank.customer_id	xml_bank.income	xml_bank.demographics	xml_bank.financial
+0000-JTALA	200000	{"spousedcat":"1","empcat":"2","gender":"F","jobsat":"1","homeown":"0","edcat":"1","hometype":"2","addresscat":"2","marital":"1","jobcat":"2","retire":"0","residecat":"4","agecat":"1"}	{"income":"18","default":"0","creddebt":"1.003392","othdebt":"2.740608"}
+0000-KDELL	10000	{"spousedcat":"1","empcat":"3","gender":"M","jobsat":"1","homeown":"0","edcat":"1","hometype":"3","addresscat":"2","marital":"1","jobcat":"2","retire":"1","residecat":"4","agecat":"2"}	{"income":"20","default":"0","creddebt":"1.002292","othdebt":"2.113208"}
+Time taken: 0.116 seconds, Fetched: 2 row(s)
+
+Solution in Hive:-
+-----------------
+create table xml_json
+ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
+stored as textfile
+location '/user/hduser/custxmljson'
+as select * from xml_bank;
+
+hive (retail)> select * from xml_json;
+OK
+xml_json.customer_id	xml_json.income	xml_json.demographics	xml_json.financial
+0000-JTALA	200000	{"spousedcat":"1","empcat":"2","gender":"F","jobsat":"1","homeown":"0","edcat":"1","hometype":"2","addresscat":"2","marital":"1","jobcat":"2","retire":"0","residecat":"4","agecat":"1"}	{"income":"18","default":"0","creddebt":"1.003392","othdebt":"2.740608"}
+0000-KDELL	10000	{"spousedcat":"1","empcat":"3","gender":"M","jobsat":"1","homeown":"0","edcat":"1","hometype":"3","addresscat":"2","marital":"1","jobcat":"2","retire":"1","residecat":"4","agecat":"2"}	{"income":"20","default":"0","creddebt":"1.002292","othdebt":"2.113208"}
+Time taken: 0.049 seconds, Fetched: 2 row(s)
+
+
+8. Import data from mysql directly creating static partition based on city=chennai as given below for additional knowledge.
+sqoop import --connect jdbc:mysql://localhost:3306/custdb --username root --password root --query "select custid,firstname,age from customer where city='chennai' and \$CONDITIONS" \
+--target-dir /user/hduser/hiveext/ --split-by custid --hive-overwrite --hive-import --create-hive-table --hive-partition-key city \
+--hive-partition-value 'chennai' --fields-terminated-by ',' --hive-table default.custinfo --direct
+
+in hive:-
+hive (default)> select * from custinfo;
+OK
+custinfo.custid	custinfo.firstname	custinfo.age	custinfo.city
+1	Arun	33	chennai
+2	srini	33	chennai
+5	arun	23	chennai
+7	inceptez	3	chennai
+Time taken: 0.882 seconds, Fetched: 4 row(s)
+============================================================================================================================================================================================================
